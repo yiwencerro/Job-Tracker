@@ -139,6 +139,20 @@
       color: var(--danger);
     }
 
+    .btn-danger-sm {
+      background: #fff1f0;
+      color: var(--danger);
+      border: 0;
+      border-radius: 6px;
+      padding: 3px 8px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      line-height: 1.6;
+    }
+
+    .btn-danger-sm:hover { background: #ffe4e1; }
+
     .btn-link {
       background: transparent;
       color: var(--primary);
@@ -206,6 +220,21 @@
       width: 100%;
     }
 
+    .hint {
+      font-size: 12px;
+      color: var(--muted);
+      margin: 0 0 12px 4px;
+    }
+
+    .hint kbd {
+      background: #eef2f7;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 1px 6px;
+      font-family: inherit;
+      font-size: 11px;
+    }
+
     .table-card { overflow: hidden; }
 
     .table-scroll { overflow-x: auto; }
@@ -230,19 +259,56 @@
       text-transform: uppercase;
       letter-spacing: .04em;
       white-space: nowrap;
+      user-select: none;
+    }
+
+    th.sortable {
+      cursor: pointer;
+    }
+
+    th.sortable:hover {
+      color: var(--primary);
     }
 
     td {
       font-size: 14px;
     }
 
-    .job-title {
-      font-weight: 800;
-      margin-bottom: 4px;
+    td[data-field] {
+      cursor: pointer;
+      transition: background .1s;
     }
 
-    .company {
+    td[data-field]:hover {
+      background: #f9fafb;
+    }
+
+    td.editing {
+      background: #eff6ff;
+      cursor: default;
+    }
+
+    .edit-input {
+      width: 100%;
+      padding: 6px 8px;
+      font-size: 13px;
+      border: 1px solid var(--primary);
+      border-radius: 6px;
+    }
+
+    .edit-input + .edit-input {
+      margin-top: 6px;
+    }
+
+    .company-name {
+      font-weight: 800;
+      font-size: 15px;
+      margin-bottom: 3px;
+    }
+
+    .job-position {
       color: var(--muted);
+      font-size: 13px;
     }
 
     .url-link {
@@ -337,6 +403,33 @@
       font-size: 14px;
     }
 
+    #toast {
+      position: fixed;
+      bottom: 22px;
+      right: 22px;
+      background: #1f2937;
+      color: white;
+      padding: 10px 16px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      box-shadow: 0 10px 30px rgba(0,0,0,.25);
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity .18s, transform .18s;
+      pointer-events: none;
+      z-index: 50;
+    }
+
+    #toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    #toast.error {
+      background: var(--danger);
+    }
+
     @media (max-width: 900px) {
       .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .toolbar {
@@ -417,17 +510,19 @@
       <button id="refreshBtn" class="btn btn-secondary">Refresh</button>
     </section>
 
+    <p class="hint">Click any cell to edit it directly. Press <kbd>Enter</kbd> or click away to save, <kbd>Esc</kbd> to cancel. <kbd>Ctrl</kbd>+<kbd>S</kbd> to save, <kbd>Ctrl</kbd>+<kbd>Z</kbd> to undo your last change.</p>
+
     <section class="table-card card">
       <div class="table-scroll">
         <table>
           <thead>
             <tr>
-              <th>Company / Job Title</th>
+              <th>Company / Position</th>
               <th>Work Type</th>
               <th>Company Salary</th>
               <th>Expected Salary</th>
-              <th>Status</th>
-              <th>Applied Date</th>
+              <th id="thStatus" class="sortable">Status</th>
+              <th id="thAppliedDate" class="sortable">Applied Date</th>
               <th>URL</th>
               <th>Notes</th>
               <th>Actions</th>
@@ -491,7 +586,7 @@
 
           <div class="field">
             <label for="companySalaryRange">Company Salary Range</label>
-            <input id="companySalaryRange" placeholder="$120,000–$150,000" />
+            <input id="companySalaryRange" placeholder="$120,000-$150,000" />
           </div>
 
           <div class="field">
@@ -520,6 +615,8 @@
     </form>
   </dialog>
 
+  <div id="toast"></div>
+
   <script>
     // ==========================================================
     // STEP 1: Paste your Supabase Project URL and Publishable Key
@@ -537,6 +634,13 @@
 
     let currentUser = null;
     let jobs = [];
+    let undoStack = [];
+
+    const STATUS_OPTIONS = ["Interested", "Submitted", "Interview", "Offer", "Rejected"];
+    const STATUS_ORDER = STATUS_OPTIONS;
+    const WORK_TYPE_OPTIONS = ["Remote", "Hybrid", "On-site", "Contract"];
+
+    let sortState = { column: null, direction: "asc" };
 
     const el = (id) => document.getElementById(id);
 
@@ -545,6 +649,8 @@
     const authMessage = el("authMessage");
     const formMessage = el("formMessage");
     const jobDialog = el("jobDialog");
+    const jobsBody = el("jobsBody");
+    const toastEl = el("toast");
 
     function showMessage(target, message, type = "error") {
       target.textContent = message;
@@ -554,6 +660,15 @@
     function hideMessage(target) {
       target.textContent = "";
       target.className = "message hidden";
+    }
+
+    let toastTimer = null;
+    function showToast(message, type = "success") {
+      clearTimeout(toastTimer);
+      toastEl.textContent = message;
+      toastEl.className = type === "error" ? "error" : "";
+      requestAnimationFrame(() => toastEl.classList.add("show"));
+      toastTimer = setTimeout(() => toastEl.classList.remove("show"), 2200);
     }
 
     function todayISO() {
@@ -605,6 +720,7 @@
         appView.classList.add("hidden");
         authView.classList.remove("hidden");
         jobs = [];
+        undoStack = [];
       }
     }
 
@@ -657,7 +773,6 @@
       const { data, error } = await client
         .from("jobs")
         .select("*")
-        .order("applied_date", { ascending: false, nullsFirst: false })
         .order("created_at", { ascending: false });
 
       if (error) {
@@ -688,35 +803,71 @@
       });
     }
 
+    function sortArrow(column) {
+      if (sortState.column !== column) return "";
+      return sortState.direction === "asc" ? " \u25B2" : " \u25BC";
+    }
+
+    function toggleSort(column) {
+      if (sortState.column === column) {
+        sortState.direction = sortState.direction === "asc" ? "desc" : "asc";
+      } else {
+        sortState.column = column;
+        sortState.direction = "asc";
+      }
+      renderJobs();
+    }
+
+    function applySort(list) {
+      if (!sortState.column) return list;
+      const sorted = [...list];
+      const dir = sortState.direction === "asc" ? 1 : -1;
+
+      sorted.sort((a, b) => {
+        let result = 0;
+        if (sortState.column === "applied_date") {
+          const aVal = a.applied_date ? new Date(a.applied_date).getTime() : -Infinity;
+          const bVal = b.applied_date ? new Date(b.applied_date).getTime() : -Infinity;
+          result = aVal - bVal;
+        } else if (sortState.column === "status") {
+          const aIdx = STATUS_ORDER.indexOf(a.status);
+          const bIdx = STATUS_ORDER.indexOf(b.status);
+          result = (aIdx === -1 ? 999 : aIdx) - (bIdx === -1 ? 999 : bIdx);
+        }
+        return result * dir;
+      });
+
+      return sorted;
+    }
+
     function renderJobs() {
-      const filtered = getFilteredJobs();
-      const body = el("jobsBody");
+      const filtered = applySort(getFilteredJobs());
+      const body = jobsBody;
 
       body.innerHTML = filtered.map((job) => `
-        <tr>
-          <td>
-            <div class="job-title">${escapeHtml(job.job_title || "")}</div>
-            <div class="company">${escapeHtml(job.company || "")}</div>
+        <tr data-id="${job.id}">
+          <td data-field="companyTitle">
+            <div class="company-name">${escapeHtml(job.company || "")}</div>
+            <div class="job-position">${escapeHtml(job.job_title || "")}</div>
           </td>
-          <td>${escapeHtml(job.work_type || "—")}</td>
-          <td>${escapeHtml(job.company_salary_range || "—")}</td>
-          <td>${escapeHtml(job.expected_salary || "—")}</td>
-          <td>
+          <td data-field="work_type">${escapeHtml(job.work_type || "\u2014")}</td>
+          <td data-field="company_salary_range">${escapeHtml(job.company_salary_range || "\u2014")}</td>
+          <td data-field="expected_salary">${escapeHtml(job.expected_salary || "\u2014")}</td>
+          <td data-field="status">
             <span class="status-pill ${statusClass(job.status || "")}">
-              ${escapeHtml(job.status || "—")}
+              ${escapeHtml(job.status || "\u2014")}
             </span>
           </td>
-          <td>${escapeHtml(job.applied_date || "—")}</td>
-          <td>
+          <td data-field="applied_date">${escapeHtml(job.applied_date || "\u2014")}</td>
+          <td data-field="url">
             ${job.url
-              ? `<a class="url-link" href="${escapeHtml(job.url)}" target="_blank" rel="noopener">Open</a>`
-              : "—"}
+              ? `<a class="url-link" href="${escapeHtml(job.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Open</a>`
+              : "\u2014"}
           </td>
-          <td>${escapeHtml(job.notes || "—")}</td>
+          <td data-field="notes">${escapeHtml(job.notes || "\u2014")}</td>
           <td>
             <div class="actions">
-              <button class="btn btn-secondary" onclick="editJob(${job.id})">Edit</button>
-              <button class="btn btn-danger" onclick="deleteJob(${job.id})">Delete</button>
+              <button class="btn-danger-sm" onclick="deleteJob(${job.id})" title="Delete">\u2715</button>
             </div>
           </td>
         </tr>
@@ -729,8 +880,253 @@
       el("interviewCount").textContent = jobs.filter(j => j.status === "Interview").length;
       el("offerCount").textContent = jobs.filter(j => j.status === "Offer").length;
       el("rejectedCount").textContent = jobs.filter(j => j.status === "Rejected").length;
+
+      el("thStatus").innerHTML = "Status" + sortArrow("status");
+      el("thAppliedDate").innerHTML = "Applied Date" + sortArrow("applied_date");
     }
 
+    el("thStatus").addEventListener("click", () => toggleSort("status"));
+    el("thAppliedDate").addEventListener("click", () => toggleSort("applied_date"));
+
+    // ---------- Inline cell editing ----------
+
+    async function commitFieldChange(jobId, changes) {
+      const job = jobs.find(j => j.id === jobId);
+      if (!job) return;
+
+      const previous = {};
+      for (const key in changes) previous[key] = job[key];
+
+      Object.assign(job, changes);
+      renderJobs();
+
+      const { error } = await client.from("jobs").update(changes).eq("id", jobId);
+
+      if (error) {
+        Object.assign(job, previous);
+        renderJobs();
+        showToast(`Save failed: ${error.message}`, "error");
+        return;
+      }
+
+      undoStack.push({ id: jobId, previous });
+      if (undoStack.length > 25) undoStack.shift();
+      showToast("Saved");
+    }
+
+    async function undoLastChange() {
+      const entry = undoStack.pop();
+      if (!entry) {
+        showToast("Nothing to undo");
+        return;
+      }
+
+      const job = jobs.find(j => j.id === entry.id);
+      if (!job) {
+        showToast("Nothing to undo");
+        return;
+      }
+
+      const changes = entry.previous;
+      const current = {};
+      for (const key in changes) current[key] = job[key];
+
+      Object.assign(job, changes);
+      renderJobs();
+
+      const { error } = await client.from("jobs").update(changes).eq("id", entry.id);
+
+      if (error) {
+        Object.assign(job, current);
+        renderJobs();
+        showToast(`Undo failed: ${error.message}`, "error");
+        return;
+      }
+
+      showToast("Undid last change");
+    }
+
+    function startEdit(td, jobId, field) {
+      if (td.classList.contains("editing")) return;
+      const job = jobs.find(j => j.id === jobId);
+      if (!job) return;
+
+      td.classList.add("editing");
+
+      if (field === "companyTitle") {
+        td.innerHTML = `
+          <input class="edit-input edit-company" value="${escapeHtml(job.company || "")}" placeholder="Company" />
+          <input class="edit-input edit-title" value="${escapeHtml(job.job_title || "")}" placeholder="Job title" />
+        `;
+        const companyInput = td.querySelector(".edit-company");
+        const titleInput = td.querySelector(".edit-title");
+
+        const commit = () => {
+          const newCompany = companyInput.value.trim();
+          const newTitle = titleInput.value.trim();
+          if (!newCompany || !newTitle) {
+            showToast("Company and job title can't be empty", "error");
+            renderJobs();
+            return;
+          }
+          if (newCompany === job.company && newTitle === job.job_title) {
+            renderJobs();
+            return;
+          }
+          commitFieldChange(jobId, { company: newCompany, job_title: newTitle });
+        };
+
+        const onKeydown = (e) => {
+          if (e.key === "Enter") { e.preventDefault(); commit(); }
+          if (e.key === "Escape") { e.preventDefault(); renderJobs(); }
+        };
+
+        companyInput.addEventListener("keydown", onKeydown);
+        titleInput.addEventListener("keydown", onKeydown);
+        td.addEventListener("focusout", (e) => {
+          if (!td.contains(e.relatedTarget)) commit();
+        });
+
+        companyInput.focus();
+        companyInput.select();
+        return;
+      }
+
+      if (field === "status") {
+        td.innerHTML = `
+          <select class="edit-input edit-status">
+            ${STATUS_OPTIONS.map(s => `<option value="${s}" ${s === job.status ? "selected" : ""}>${s}</option>`).join("")}
+          </select>
+        `;
+        const select = td.querySelector(".edit-status");
+
+        const commit = () => {
+          const newValue = select.value;
+          if (newValue === job.status) { renderJobs(); return; }
+          commitFieldChange(jobId, { status: newValue });
+        };
+
+        select.addEventListener("change", commit);
+        select.addEventListener("keydown", (e) => {
+          if (e.key === "Escape") { e.preventDefault(); renderJobs(); }
+        });
+        select.addEventListener("blur", () => renderJobs(), { once: true });
+
+        select.focus();
+        return;
+      }
+
+      if (field === "work_type") {
+        td.innerHTML = `
+          <select class="edit-input edit-work-type">
+            <option value="">Select</option>
+            ${WORK_TYPE_OPTIONS.map(w => `<option value="${w}" ${w === job.work_type ? "selected" : ""}>${w}</option>`).join("")}
+          </select>
+        `;
+        const select = td.querySelector(".edit-work-type");
+
+        const commit = () => {
+          const newValue = select.value || null;
+          if (newValue === (job.work_type || null)) { renderJobs(); return; }
+          commitFieldChange(jobId, { work_type: newValue });
+        };
+
+        select.addEventListener("change", commit);
+        select.addEventListener("blur", () => renderJobs(), { once: true });
+
+        select.focus();
+        return;
+      }
+
+      if (field === "applied_date") {
+        td.innerHTML = `<input class="edit-input edit-date" type="date" value="${job.applied_date || ""}" />`;
+        const input = td.querySelector(".edit-date");
+
+        const commit = () => {
+          const newValue = input.value || null;
+          if (newValue === (job.applied_date || null)) { renderJobs(); return; }
+          commitFieldChange(jobId, { applied_date: newValue });
+        };
+
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") { e.preventDefault(); commit(); }
+          if (e.key === "Escape") { e.preventDefault(); renderJobs(); }
+        });
+        input.addEventListener("blur", commit);
+
+        input.focus();
+        return;
+      }
+
+      // Generic single text-field cells: work handled above; these are simple text inputs.
+      const textFieldMap = {
+        company_salary_range: "Company salary range",
+        expected_salary: "Expected salary",
+        url: "URL",
+        notes: "Notes"
+      };
+
+      if (field in textFieldMap) {
+        const currentValue = job[field] || "";
+        td.innerHTML = `<input class="edit-input edit-text" type="text" value="${escapeHtml(currentValue)}" placeholder="${textFieldMap[field]}" />`;
+        const input = td.querySelector(".edit-text");
+
+        const commit = () => {
+          const newValue = input.value.trim() || null;
+          if (newValue === (job[field] || null)) { renderJobs(); return; }
+          commitFieldChange(jobId, { [field]: newValue });
+        };
+
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") { e.preventDefault(); commit(); }
+          if (e.key === "Escape") { e.preventDefault(); renderJobs(); }
+        });
+        input.addEventListener("blur", commit);
+
+        input.focus();
+        input.select();
+        return;
+      }
+
+      // Unknown field, bail out safely.
+      td.classList.remove("editing");
+    }
+
+    jobsBody.addEventListener("click", (e) => {
+      const td = e.target.closest("td[data-field]");
+      if (!td) return;
+      if (td.classList.contains("editing")) return;
+
+      const tr = td.closest("tr");
+      const jobId = Number(tr.dataset.id);
+      const field = td.dataset.field;
+      startEdit(td, jobId, field);
+    });
+
+    // ---------- Global keyboard shortcuts ----------
+
+    document.addEventListener("keydown", (e) => {
+      const ctrlOrCmd = e.ctrlKey || e.metaKey;
+      if (!ctrlOrCmd) return;
+
+      const key = e.key.toLowerCase();
+      const activeIsEditing = document.activeElement && document.activeElement.classList && document.activeElement.classList.contains("edit-input");
+
+      if (key === "s") {
+        e.preventDefault();
+        if (activeIsEditing) document.activeElement.blur();
+        showToast("All changes saved");
+        return;
+      }
+
+      if (key === "z") {
+        if (activeIsEditing) return; // let the browser's native text-undo run inside the field
+        e.preventDefault();
+        undoLastChange();
+      }
+    });
+
+    // ---------- URL autofill (used by the Add Job modal) ----------
 
     function titleCaseSlug(value = "") {
       return decodeURIComponent(value)
@@ -758,8 +1154,6 @@
       return "";
     }
 
-    // Fast, local guess based on the URL's path segments alone (no network call).
-    // Used as an instant first pass, and as a fallback if the edge function fails.
     function guessFromUrlSlug(parsed) {
       const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
       const parts = parsed.pathname.split("/").filter(Boolean);
@@ -767,23 +1161,19 @@
       let jobTitle = "";
       let workType = "";
 
-      // Greenhouse: boards.greenhouse.io/company/jobs/123
       if (host.includes("greenhouse.io")) {
         const companyIndex = parts.findIndex(p => p === "embed");
         company = cleanCompanyName(companyIndex > 0 ? parts[companyIndex - 1] : parts[0] || "");
       }
 
-      // Lever: jobs.lever.co/company/uuid
       if (host.includes("lever.co")) {
         company = cleanCompanyName(parts[0] || "");
       }
 
-      // Ashby: jobs.ashbyhq.com/company/job-id
       if (host.includes("ashbyhq.com")) {
         company = cleanCompanyName(parts[0] || "");
       }
 
-      // Workday: company.wd*.myworkdayjobs.com/.../job/location/title_id
       if (host.includes("myworkdayjobs.com")) {
         const subdomain = host.split(".")[0];
         company = cleanCompanyName(subdomain.replace(/wd\d+$/i, ""));
@@ -794,7 +1184,6 @@
         }
       }
 
-      // SmartRecruiters: jobs.smartrecruiters.com/company/id-title
       if (host.includes("smartrecruiters.com")) {
         company = cleanCompanyName(parts[0] || "");
         if (parts[1]) {
@@ -802,7 +1191,6 @@
         }
       }
 
-      // Generic readable slug fallback. Avoid treating numeric IDs as titles.
       if (!jobTitle) {
         const readable = [...parts].reverse().find(p =>
           /[a-zA-Z]/.test(p) &&
@@ -820,8 +1208,6 @@
       return { company, jobTitle, workType };
     }
 
-    // Calls the Supabase Edge Function to fetch the page and read its
-    // <title> / og:title / og:site_name tags server-side (avoids CORS).
     async function fetchJobInfoFromServer(rawUrl) {
       const { data, error } = await client.functions.invoke("fetch-job-info", {
         body: { url: rawUrl },
@@ -829,7 +1215,7 @@
 
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
-      return data; // { ogTitle, ogSiteName, pageTitle }
+      return data;
     }
 
     async function autofillFromJobUrl() {
@@ -849,7 +1235,6 @@
         return;
       }
 
-      // Instant local guess first, so the form fills in right away.
       const slugGuess = guessFromUrlSlug(parsed);
       const filled = [];
 
@@ -866,8 +1251,7 @@
         filled.push("work type");
       }
 
-      // Then ask the server to fetch the real page and fill in anything still missing.
-      message.textContent = "Looking up job details…";
+      message.textContent = "Looking up job details\u2026";
 
       try {
         const info = await fetchJobInfoFromServer(raw);
@@ -886,15 +1270,15 @@
           message.textContent = `Auto-filled ${[...new Set(filled)].join(", ")}. Please review before saving.`;
           message.style.color = "var(--success)";
         } else {
-          message.textContent = "Link saved. Couldn't detect details automatically — please fill in manually.";
+          message.textContent = "Link saved. Couldn't detect details automatically \u2014 please fill in manually.";
           message.style.color = "var(--muted)";
         }
       } catch (err) {
         if (filled.length) {
-          message.textContent = `Auto-filled ${[...new Set(filled)].join(", ")} from the link. Lookup for more details failed — please review.`;
+          message.textContent = `Auto-filled ${[...new Set(filled)].join(", ")} from the link. Lookup for more details failed \u2014 please review.`;
           message.style.color = "var(--success)";
         } else {
-          message.textContent = "Couldn't fetch page details — please fill in manually.";
+          message.textContent = "Couldn't fetch page details \u2014 please fill in manually.";
           message.style.color = "var(--danger)";
         }
       }
@@ -911,29 +1295,9 @@
       jobDialog.showModal();
     }
 
-    window.editJob = function(id) {
-      const job = jobs.find((item) => item.id === id);
-      if (!job) return;
-
-      el("jobId").value = job.id;
-      el("url").value = job.url || "";
-      el("company").value = job.company || "";
-      el("jobTitle").value = job.job_title || "";
-      el("workType").value = job.work_type || "";
-      el("companySalaryRange").value = job.company_salary_range || "";
-      el("expectedSalary").value = job.expected_salary || "";
-      el("status").value = job.status || "Submitted";
-      el("appliedDate").value = job.applied_date || "";
-      el("notes").value = job.notes || "";
-      el("modalTitle").textContent = "Edit Job";
-      el("urlAutofillMessage").textContent = "";
-      hideMessage(formMessage);
-      jobDialog.showModal();
-    };
-
     window.deleteJob = async function(id) {
       const job = jobs.find((item) => item.id === id);
-      const label = job ? `${job.company} — ${job.job_title}` : "this job";
+      const label = job ? `${job.company} \u2014 ${job.job_title}` : "this job";
       if (!confirm(`Delete ${label}?`)) return;
 
       const { error } = await client
@@ -953,7 +1317,6 @@
       event.preventDefault();
       hideMessage(formMessage);
 
-      const id = el("jobId").value;
       const payload = {
         user_id: currentUser.id,
         url: el("url").value.trim() || null,
@@ -974,17 +1337,7 @@
 
       el("saveBtn").disabled = true;
 
-      let result;
-      if (id) {
-        result = await client
-          .from("jobs")
-          .update(payload)
-          .eq("id", Number(id));
-      } else {
-        result = await client
-          .from("jobs")
-          .insert(payload);
-      }
+      const result = await client.from("jobs").insert(payload);
 
       el("saveBtn").disabled = false;
 
