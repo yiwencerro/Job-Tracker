@@ -758,21 +758,9 @@
       return "";
     }
 
-    function autofillFromJobUrl() {
-      const raw = el("url").value.trim();
-      const message = el("urlAutofillMessage");
-      message.textContent = "";
-
-      if (!raw) return;
-
-      let parsed;
-      try {
-        parsed = new URL(raw);
-      } catch {
-        message.textContent = "Please paste a complete link beginning with https://";
-        return;
-      }
-
+    // Fast, local guess based on the URL's path segments alone (no network call).
+    // Used as an instant first pass, and as a fallback if the edge function fails.
+    function guessFromUrlSlug(parsed) {
       const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
       const parts = parsed.pathname.split("/").filter(Boolean);
       let company = "";
@@ -827,29 +815,88 @@
         }
       }
 
-      workType ||= detectWorkType(raw);
+      workType ||= detectWorkType(parsed.href);
 
-      let filled = [];
-      if (company && !el("company").value.trim()) {
-        el("company").value = company;
+      return { company, jobTitle, workType };
+    }
+
+    // Calls the Supabase Edge Function to fetch the page and read its
+    // <title> / og:title / og:site_name tags server-side (avoids CORS).
+    async function fetchJobInfoFromServer(rawUrl) {
+      const { data, error } = await client.functions.invoke("fetch-job-info", {
+        body: { url: rawUrl },
+      });
+
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      return data; // { ogTitle, ogSiteName, pageTitle }
+    }
+
+    async function autofillFromJobUrl() {
+      const raw = el("url").value.trim();
+      const message = el("urlAutofillMessage");
+      message.textContent = "";
+      message.style.color = "var(--muted)";
+
+      if (!raw) return;
+
+      let parsed;
+      try {
+        parsed = new URL(raw);
+      } catch {
+        message.textContent = "Please paste a complete link beginning with https://";
+        message.style.color = "var(--danger)";
+        return;
+      }
+
+      // Instant local guess first, so the form fills in right away.
+      const slugGuess = guessFromUrlSlug(parsed);
+      const filled = [];
+
+      if (slugGuess.company && !el("company").value.trim()) {
+        el("company").value = slugGuess.company;
         filled.push("company");
       }
-      if (jobTitle && !el("jobTitle").value.trim()) {
-        el("jobTitle").value = jobTitle;
+      if (slugGuess.jobTitle && !el("jobTitle").value.trim()) {
+        el("jobTitle").value = slugGuess.jobTitle;
         filled.push("job title");
       }
-      if (workType && !el("workType").value) {
-        el("workType").value = workType;
+      if (slugGuess.workType && !el("workType").value) {
+        el("workType").value = slugGuess.workType;
         filled.push("work type");
       }
 
-      if (filled.length) {
-        message.textContent = `Auto-filled ${filled.join(", ")}. Please review before saving.`;
-        message.style.color = "var(--success)";
-      } else {
-        message.textContent =
-          "Link saved. This site hides its job details from browser pages, so please enter the company and job title manually.";
-        message.style.color = "var(--muted)";
+      // Then ask the server to fetch the real page and fill in anything still missing.
+      message.textContent = "Looking up job details…";
+
+      try {
+        const info = await fetchJobInfoFromServer(raw);
+
+        if (info?.ogSiteName && !el("company").value.trim()) {
+          el("company").value = cleanCompanyName(info.ogSiteName);
+          filled.push("company");
+        }
+        const titleSource = info?.ogTitle || info?.pageTitle;
+        if (titleSource && !el("jobTitle").value.trim()) {
+          el("jobTitle").value = titleCaseSlug(titleSource);
+          filled.push("job title");
+        }
+
+        if (filled.length) {
+          message.textContent = `Auto-filled ${[...new Set(filled)].join(", ")}. Please review before saving.`;
+          message.style.color = "var(--success)";
+        } else {
+          message.textContent = "Link saved. Couldn't detect details automatically — please fill in manually.";
+          message.style.color = "var(--muted)";
+        }
+      } catch (err) {
+        if (filled.length) {
+          message.textContent = `Auto-filled ${[...new Set(filled)].join(", ")} from the link. Lookup for more details failed — please review.`;
+          message.style.color = "var(--success)";
+        } else {
+          message.textContent = "Couldn't fetch page details — please fill in manually.";
+          message.style.color = "var(--danger)";
+        }
       }
     }
 
