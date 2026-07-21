@@ -194,10 +194,16 @@
 
     .toolbar {
       display: grid;
-      grid-template-columns: minmax(220px, 1fr) 180px auto;
+      grid-template-columns: auto minmax(260px, 480px) 180px auto;
+      justify-content: start;
+      align-items: center;
       gap: 12px;
       padding: 16px;
       margin-bottom: 18px;
+    }
+
+    .toolbar #searchInput {
+      width: 100%;
     }
 
     .table-card { overflow: hidden; }
@@ -333,7 +339,10 @@
 
     @media (max-width: 900px) {
       .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .toolbar { grid-template-columns: 1fr; }
+      .toolbar {
+        grid-template-columns: 1fr;
+        justify-content: stretch;
+      }
       .topbar { align-items: flex-start; flex-direction: column; }
       .user-bar { justify-content: flex-start; }
     }
@@ -383,7 +392,6 @@
       <div class="user-bar">
         <span id="userEmail" class="user-email"></span>
         <button id="signOutBtn" class="btn btn-secondary">Sign Out</button>
-        <button id="addJobBtn" class="btn btn-primary">+ Add Job</button>
       </div>
     </header>
 
@@ -396,7 +404,8 @@
     </section>
 
     <section class="toolbar card">
-      <input id="searchInput" type="search" placeholder="Search company, title, work type, salary, or notes..." />
+      <button id="addJobBtn" class="btn btn-primary">+ Add Job</button>
+      <input id="searchInput" type="search" placeholder="Search jobs..." />
       <select id="statusFilter">
         <option value="">All statuses</option>
         <option>Interested</option>
@@ -444,7 +453,8 @@
         <div class="form-grid">
           <div class="field full">
             <label for="url">URL</label>
-            <input id="url" type="url" placeholder="https://..." />
+            <input id="url" type="url" placeholder="Paste a job link to auto-fill when possible" />
+            <div id="urlAutofillMessage" style="font-size:12px;color:var(--muted);margin-top:6px;"></div>
           </div>
 
           <div class="field">
@@ -514,8 +524,8 @@
     // ==========================================================
     // STEP 1: Paste your Supabase Project URL and Publishable Key
     // ==========================================================
-    const SUPABASE_URL = "https://qgmobresyvzgmpfstheq.supabase.co";
-    const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_lr1Hrc0ghz_s4UkeW_GsWQ_fDaNBrPc";
+    const SUPABASE_URL = "PASTE_YOUR_SUPABASE_URL_HERE";
+    const SUPABASE_PUBLISHABLE_KEY = "PASTE_YOUR_PUBLISHABLE_KEY_HERE";
 
     const configured =
       !SUPABASE_URL.includes("PASTE_") &&
@@ -721,6 +731,128 @@
       el("rejectedCount").textContent = jobs.filter(j => j.status === "Rejected").length;
     }
 
+
+    function titleCaseSlug(value = "") {
+      return decodeURIComponent(value)
+        .replace(/[?#].*$/, "")
+        .replace(/[-_+]+/g, " ")
+        .replace(/\b[a-f0-9]{8,}\b/gi, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/\b\w/g, char => char.toUpperCase());
+    }
+
+    function cleanCompanyName(value = "") {
+      return titleCaseSlug(value)
+        .replace(/\b(Inc|Llc|Ltd|Careers|Jobs)\b/gi, "")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    function detectWorkType(textValue = "") {
+      const value = textValue.toLowerCase();
+      if (value.includes("remote")) return "Remote";
+      if (value.includes("hybrid")) return "Hybrid";
+      if (value.includes("on-site") || value.includes("onsite")) return "On-site";
+      if (value.includes("contract")) return "Contract";
+      return "";
+    }
+
+    function autofillFromJobUrl() {
+      const raw = el("url").value.trim();
+      const message = el("urlAutofillMessage");
+      message.textContent = "";
+
+      if (!raw) return;
+
+      let parsed;
+      try {
+        parsed = new URL(raw);
+      } catch {
+        message.textContent = "Please paste a complete link beginning with https://";
+        return;
+      }
+
+      const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+      const parts = parsed.pathname.split("/").filter(Boolean);
+      let company = "";
+      let jobTitle = "";
+      let workType = "";
+
+      // Greenhouse: boards.greenhouse.io/company/jobs/123
+      if (host.includes("greenhouse.io")) {
+        const companyIndex = parts.findIndex(p => p === "embed");
+        company = cleanCompanyName(companyIndex > 0 ? parts[companyIndex - 1] : parts[0] || "");
+      }
+
+      // Lever: jobs.lever.co/company/uuid
+      if (host.includes("lever.co")) {
+        company = cleanCompanyName(parts[0] || "");
+      }
+
+      // Ashby: jobs.ashbyhq.com/company/job-id
+      if (host.includes("ashbyhq.com")) {
+        company = cleanCompanyName(parts[0] || "");
+      }
+
+      // Workday: company.wd*.myworkdayjobs.com/.../job/location/title_id
+      if (host.includes("myworkdayjobs.com")) {
+        const subdomain = host.split(".")[0];
+        company = cleanCompanyName(subdomain.replace(/wd\d+$/i, ""));
+        const jobIndex = parts.findIndex(p => p.toLowerCase() === "job");
+        if (jobIndex >= 0 && parts[jobIndex + 2]) {
+          jobTitle = titleCaseSlug(parts[jobIndex + 2].replace(/_[A-Z0-9-]+$/i, ""));
+          workType = detectWorkType(parts.slice(jobIndex + 1).join(" "));
+        }
+      }
+
+      // SmartRecruiters: jobs.smartrecruiters.com/company/id-title
+      if (host.includes("smartrecruiters.com")) {
+        company = cleanCompanyName(parts[0] || "");
+        if (parts[1]) {
+          jobTitle = titleCaseSlug(parts[1].replace(/^\d+-/, ""));
+        }
+      }
+
+      // Generic readable slug fallback. Avoid treating numeric IDs as titles.
+      if (!jobTitle) {
+        const readable = [...parts].reverse().find(p =>
+          /[a-zA-Z]/.test(p) &&
+          !/^(jobs?|careers?|view|job-details?|positions?|apply)$/i.test(p) &&
+          !/^[a-f0-9-]{16,}$/i.test(p) &&
+          !/^\d+$/.test(p)
+        );
+        if (readable && /[-_]/.test(readable)) {
+          jobTitle = titleCaseSlug(readable.replace(/^\d+-/, ""));
+        }
+      }
+
+      workType ||= detectWorkType(raw);
+
+      let filled = [];
+      if (company && !el("company").value.trim()) {
+        el("company").value = company;
+        filled.push("company");
+      }
+      if (jobTitle && !el("jobTitle").value.trim()) {
+        el("jobTitle").value = jobTitle;
+        filled.push("job title");
+      }
+      if (workType && !el("workType").value) {
+        el("workType").value = workType;
+        filled.push("work type");
+      }
+
+      if (filled.length) {
+        message.textContent = `Auto-filled ${filled.join(", ")}. Please review before saving.`;
+        message.style.color = "var(--success)";
+      } else {
+        message.textContent =
+          "Link saved. This site hides its job details from browser pages, so please enter the company and job title manually.";
+        message.style.color = "var(--muted)";
+      }
+    }
+
     function openAddDialog() {
       el("jobForm").reset();
       el("jobId").value = "";
@@ -728,6 +860,7 @@
       el("appliedDate").value = todayISO();
       el("status").value = "Submitted";
       hideMessage(formMessage);
+      el("urlAutofillMessage").textContent = "";
       jobDialog.showModal();
     }
 
@@ -746,6 +879,7 @@
       el("appliedDate").value = job.applied_date || "";
       el("notes").value = job.notes || "";
       el("modalTitle").textContent = "Edit Job";
+      el("urlAutofillMessage").textContent = "";
       hideMessage(formMessage);
       jobDialog.showModal();
     };
@@ -823,6 +957,8 @@
     el("closeDialogBtn").addEventListener("click", () => jobDialog.close());
     el("cancelBtn").addEventListener("click", () => jobDialog.close());
     el("jobForm").addEventListener("submit", saveJob);
+    el("url").addEventListener("change", autofillFromJobUrl);
+    el("url").addEventListener("paste", () => setTimeout(autofillFromJobUrl, 0));
     el("searchInput").addEventListener("input", renderJobs);
     el("statusFilter").addEventListener("change", renderJobs);
     el("refreshBtn").addEventListener("click", loadJobs);
