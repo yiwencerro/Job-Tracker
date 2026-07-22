@@ -692,6 +692,26 @@
       return `status-${status.toLowerCase().replaceAll(" ", "-")}`;
     }
 
+    // Finds an existing job with the same company + position (case/whitespace
+    // insensitive), optionally excluding a given job id (used when editing
+    // a row so it doesn't flag itself as a duplicate of itself).
+    function findDuplicateJob(company, jobTitle, excludeId = null) {
+      const c = (company || "").trim().toLowerCase();
+      const t = (jobTitle || "").trim().toLowerCase();
+      if (!c || !t) return null;
+
+      return jobs.find(j =>
+        j.id !== excludeId &&
+        (j.company || "").trim().toLowerCase() === c &&
+        (j.job_title || "").trim().toLowerCase() === t
+      ) || null;
+    }
+
+    function describeDuplicate(dup) {
+      const dateText = dup.applied_date ? `applied ${dup.applied_date}` : "no applied date set";
+      return `You already have an entry for ${dup.company} \u2014 ${dup.job_title} (status: ${dup.status || "\u2014"}, ${dateText}).\n\nAdd this anyway?`;
+    }
+
     // Defensive: if a date value ever comes back with a time/timezone
     // component (e.g. "2026-07-21T00:00:00+00:00"), only show the plain
     // calendar date part so nothing gets shifted by the viewer's timezone.
@@ -986,6 +1006,16 @@
             renderJobs();
             return;
           }
+
+          const dup = findDuplicateJob(newCompany, newTitle, jobId);
+          if (dup) {
+            const proceed = confirm(describeDuplicate(dup));
+            if (!proceed) {
+              renderJobs();
+              return;
+            }
+          }
+
           commitFieldChange(jobId, { company: newCompany, job_title: newTitle });
         };
 
@@ -1346,6 +1376,12 @@
       if (!payload.company || !payload.job_title) {
         showMessage(formMessage, "Company and Job Title are required.");
         return;
+      }
+
+      const dup = findDuplicateJob(payload.company, payload.job_title);
+      if (dup) {
+        const proceed = confirm(describeDuplicate(dup));
+        if (!proceed) return;
       }
 
       el("saveBtn").disabled = true;
