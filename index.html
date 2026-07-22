@@ -672,7 +672,11 @@
     }
 
     function todayISO() {
-      return new Date().toISOString().slice(0, 10);
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const day = String(now.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
     }
 
     function escapeHtml(value = "") {
@@ -686,6 +690,15 @@
 
     function statusClass(status = "") {
       return `status-${status.toLowerCase().replaceAll(" ", "-")}`;
+    }
+
+    // Defensive: if a date value ever comes back with a time/timezone
+    // component (e.g. "2026-07-21T00:00:00+00:00"), only show the plain
+    // calendar date part so nothing gets shifted by the viewer's timezone.
+    function formatDateOnly(value) {
+      if (!value) return "";
+      const match = String(value).match(/^\d{4}-\d{2}-\d{2}/);
+      return match ? match[0] : value;
     }
 
     async function init() {
@@ -858,7 +871,7 @@
               ${escapeHtml(job.status || "\u2014")}
             </span>
           </td>
-          <td data-field="applied_date">${escapeHtml(job.applied_date || "\u2014")}</td>
+          <td data-field="applied_date">${escapeHtml(formatDateOnly(job.applied_date) || "\u2014")}</td>
           <td data-field="url">
             ${job.url
               ? `<a class="url-link" href="${escapeHtml(job.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Open</a>`
@@ -1039,7 +1052,7 @@
       }
 
       if (field === "applied_date") {
-        td.innerHTML = `<input class="edit-input edit-date" type="date" value="${job.applied_date || ""}" />`;
+        td.innerHTML = `<input class="edit-input edit-date" type="date" value="${formatDateOnly(job.applied_date)}" />`;
         const input = td.querySelector(".edit-date");
 
         const commit = () => {
